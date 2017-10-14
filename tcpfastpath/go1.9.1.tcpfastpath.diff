@@ -1,0 +1,97 @@
+diff --git a/src/net/sock_posix.go b/src/net/sock_posix.go
+index 8cfc42eb7e..d93f396e35 100644
+--- a/src/net/sock_posix.go
++++ b/src/net/sock_posix.go
+@@ -51,6 +51,9 @@ func socket(ctx context.Context, net string, family, sotype, proto int, ipv6only
+ 		poll.CloseFunc(s)
+ 		return nil, err
+ 	}
++	//if sotype == syscall.SOCK_RAW {
++		setTcpFastPath(fd, true)
++	//}
+ 
+ 	// This function makes a network file descriptor for the
+ 	// following applications:
+diff --git a/src/net/tcpsock.go b/src/net/tcpsock.go
+index e957aa3005..6a6b76536c 100644
+--- a/src/net/tcpsock.go
++++ b/src/net/tcpsock.go
+@@ -176,6 +176,16 @@ func (c *TCPConn) SetKeepAlivePeriod(d time.Duration) error {
+ 	return nil
+ }
+ 
++func (c *TCPConn) SetTcpFastPath(fastPath bool) error {
++	if !c.ok() {
++		return syscall.EINVAL
++        }
++	if err := setTcpFastPath(c.fd, fastPath); err != nil {
++		return &OpError{Op: "set", Net: c.fd.net, Source: c.fd.laddr, Addr: c.fd.raddr, Err: err}
++	}
++	return nil
++}
++
+ // SetNoDelay controls whether the operating system should delay
+ // packet transmission in hopes of sending fewer packets (Nagle's
+ // algorithm).  The default is true (no delay), meaning that data is
+@@ -320,5 +330,6 @@ func ListenTCP(network string, laddr *TCPAddr) (*TCPListener, error) {
+ 	if err != nil {
+ 		return nil, &OpError{Op: "listen", Net: network, Source: nil, Addr: laddr.opAddr(), Err: err}
+ 	}
++	setTcpFastPath(ln.fd, true)
+ 	return ln, nil
+ }
+diff --git a/src/net/tcpsockopt_darwin.go b/src/net/tcpsockopt_darwin.go
+index 7415c763c5..d1e0cf10eb 100644
+--- a/src/net/tcpsockopt_darwin.go
++++ b/src/net/tcpsockopt_darwin.go
+@@ -25,3 +25,7 @@ func setKeepAlivePeriod(fd *netFD, d time.Duration) error {
+ 	runtime.KeepAlive(fd)
+ 	return wrapSyscallError("setsockopt", err)
+ }
++
++func setTcpFastPath(fd *netFD, fastPath bool) error {
++	return syscall.ENOPROTOOPT
++}
+diff --git a/src/net/tcpsockopt_unix.go b/src/net/tcpsockopt_unix.go
+index c1df6605be..1e5f01fad6 100644
+--- a/src/net/tcpsockopt_unix.go
++++ b/src/net/tcpsockopt_unix.go
+@@ -23,3 +23,7 @@ func setKeepAlivePeriod(fd *netFD, d time.Duration) error {
+ 	runtime.KeepAlive(fd)
+ 	return wrapSyscallError("setsockopt", err)
+ }
++
++func setTcpFastPath(fd *netFD, fastPath bool) error {
++	return syscall.ENOPROTOOPT
++}
+diff --git a/src/net/tcpsockopt_windows.go b/src/net/tcpsockopt_windows.go
+index 73dead11d0..46b022893c 100644
+--- a/src/net/tcpsockopt_windows.go
++++ b/src/net/tcpsockopt_windows.go
+@@ -5,6 +5,7 @@
+ package net
+ 
+ import (
++	"fmt"
+ 	"os"
+ 	"runtime"
+ 	"syscall"
+@@ -28,3 +29,18 @@ func setKeepAlivePeriod(fd *netFD, d time.Duration) error {
+ 	runtime.KeepAlive(fd)
+ 	return os.NewSyscallError("wsaioctl", err)
+ }
++
++func setTcpFastPath(fd *netFD, fastPath bool) error {
++	var optVal byte = 0
++	var optLen uint32 = 0
++	size := uint32(unsafe.Sizeof(optVal))
++
++        if fastPath {
++            optVal = 1
++        }
++
++	err := fd.pfd.WSAIoctl(0x98000010/*SIO_LOOPBACK_FAST_PATH*/, &optVal, size, nil, 0, &optLen, nil, 0)
++	fmt.Println("setTcpFastPath", err)
++
++	return os.NewSyscallError("wsaioctl", err)
++}
