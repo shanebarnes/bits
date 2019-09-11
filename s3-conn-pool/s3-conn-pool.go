@@ -79,4 +79,6 @@ func main() {
 
 		time.Sleep(10 * time.Millisecond)
 	}
+
+	fmt.Println("Completed connection pool test")
 }
