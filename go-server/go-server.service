@@ -1,0 +1,21 @@
+[Unit]
+Description=Golang Server Service
+After=network.target
+
+[Service]
+ExecStartPre=-/bin/mkdir -p /var/log/go-server
+ExecStart=/usr/local/bin/go-server -cert /etc/pki/nginx/server.crt -key /etc/pki/nginx/private/server.key
+LimitNOFILE=4096
+Restart=always
+RestartSec=5
+StandardError=file:/var/log/go-server/error.log
+StandardOutput=file:/var/log/go-server/info.log
+StartLimitIntervalSec=10
+StartLimitBurst=3
+TimeoutStartSec=0
+TimeoutStopSec=0
+Type=simple
+User=root
+
+[Install]
+WantedBy=multi-user.target
