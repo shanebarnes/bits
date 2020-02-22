@@ -108,12 +108,14 @@ type requestTrace struct {
 }
 
 func printRequestTrace(rw http.ResponseWriter, req *http.Request) {
+	now := time.Now()
+	traceId := incrementRequestCount()
 	writers := []io.Writer{os.Stdout, rw}
 	for _, writer := range writers{
 		data := requestTrace{
-			Id:            incrementRequestCount(),
-			Time:          time.Now().Format(time.RFC3339Nano),
-			Uptime:        time.Since(timeZero).String(),
+			Id:            traceId,
+			Time:          now.Format(time.RFC3339Nano),
+			Uptime:        now.Sub(timeZero).String(),
 			Method:        req.Method,
 			Url:           req.RequestURI,
 			Protocol:      req.Proto,
