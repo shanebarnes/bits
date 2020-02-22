@@ -1,12 +1,25 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"golang.org/x/net/netutil"
+)
+
+const (
+	schemeHttp  = "http"
+	schemeHttps = "https"
 )
 
 var (
@@ -15,6 +28,17 @@ var (
 	timeZero time.Time
 )
 
+type arrStr []string
+
+func (a *arrStr) String() string {
+	return strings.Join(*a, ", ")
+}
+
+func (a *arrStr) Set(val string) error {
+	*a = append(*a, val)
+	return nil
+}
+
 func incrementRequestCount() int64 {
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -22,68 +46,110 @@ func incrementRequestCount() int64 {
 	return reqCount
 }
 
-func launchHttp(addr string, ch chan error) {
-	go func() {
-		err := http.ListenAndServe(addr, nil)
-		ch <- err
-	} ()
+func connStateCb(conn net.Conn, state http.ConnState) {
+	var localAddr, remoteAddr string
+	if conn.LocalAddr() != nil {
+		localAddr = conn.LocalAddr().String()
+	}
+
+	if conn.RemoteAddr() != nil {
+		remoteAddr = conn.RemoteAddr().String()
+	}
+
+	fmt.Fprintf(os.Stdout,
+		"server %v: remote address=%v, http state=%v\n",
+		localAddr,
+		remoteAddr,
+		state.String())
 }
 
-func launchHttps(addr string, ch chan error, cert, key string) {
-	go func() {
-		err := http.ListenAndServeTLS(addr, cert, key, nil)
-		ch <- err
-	} ()
+func newHttpServer() *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", printRequestTrace)
+	return &http.Server{ConnState: connStateCb, Handler: mux}
 }
 
-func printHeaders(w http.ResponseWriter, req *http.Request) {
-	fmt.Fprintf(w, "Request      : %v\n", incrementRequestCount())
-	fmt.Fprintf(w, "Timestamp    : %v\n", time.Now().Format(time.RFC3339Nano))
-	fmt.Fprintf(w, "Uptime       : %v\n", time.Since(timeZero))
-	fmt.Fprintf(w, "\n")
-
-	fmt.Fprintf(w, "Method       : %v\n", req.Method)
-	fmt.Fprintf(w, "URL          : %v\n", req.RequestURI)
-	fmt.Fprintf(w, "Protocol     : %v\n", req.Proto)
-	fmt.Fprintf(w, "ContentLength: %v\n", req.ContentLength)
-	fmt.Fprintf(w, "Host         : %v\n", req.Host)
-	fmt.Fprintf(w, "RemoteAddress: %v\n", req.RemoteAddr)
-	fmt.Fprintf(w, "\n")
-
-	fmt.Fprintf(w, "Headers      :\n")
-	fmt.Fprintf(w, "\n")
-
-	for name, headers := range req.Header {
-		for _, h := range headers {
-			fmt.Fprintf(w, "    %-32v: %v\n", name, h)
+func serveHttp(addr, tlsCert, tlsKey string, ch chan error) {
+	go func() {
+		fmt.Fprintf(os.Stdout, "server %v: starting\n", addr)
+		url, err := url.Parse(addr)
+		if err == nil {
+			var listener net.Listener
+			listener, err = net.Listen("tcp", url.Host)
+			if err == nil {
+				listener = netutil.LimitListener(listener, syscall.SOMAXCONN)
+				defer listener.Close()
+				switch url.Scheme {
+				case schemeHttp:
+					err = newHttpServer().Serve(listener)
+				case schemeHttps:
+					err = newHttpServer().ServeTLS(listener, tlsCert, tlsKey)
+				default:
+					err = syscall.EINVAL
+				}
+			}
 		}
+		fmt.Fprintf(os.Stdout, "server %v: stopping, %v\n", addr, err)
+		ch <- err
+	} ()
+}
+
+type requestTrace struct {
+	Id            int64       `json:"traceId"`
+	Time          string      `json:"time"`
+	Uptime        string      `json:"uptime"`
+	Method        string      `json:"method"`
+	Url           string      `json:"url"`
+	Protocol      string      `json:"protocol"`
+	ContentLength int64       `json:"contentLength"`
+	Host          string      `json:"host"`
+	RemoteAddress string      `json:"remoteAddress"`
+	Headers       http.Header `json:"headers"`
+}
+
+func printRequestTrace(rw http.ResponseWriter, req *http.Request) {
+	writers := []io.Writer{os.Stdout, rw}
+	for _, writer := range writers{
+		data := requestTrace{
+			Id:            incrementRequestCount(),
+			Time:          time.Now().Format(time.RFC3339Nano),
+			Uptime:        time.Since(timeZero).String(),
+			Method:        req.Method,
+			Url:           req.RequestURI,
+			Protocol:      req.Proto,
+			ContentLength: req.ContentLength,
+			Host:          req.Host,
+			RemoteAddress: req.RemoteAddr,
+			Headers:       req.Header,
+		}
+		encoder := json.NewEncoder(writer)
+		encoder.SetIndent("", "   ") // Make it pretty
+		encoder.Encode(data)
 	}
 }
 
 func main() {
 	timeZero = time.Now()
 
-	addrHttp := flag.String("http", ":80", "HTTP server listen address")
-	addrHttps := flag.String("https", ":443", "HTTPS server listen address")
-	certFile := flag.String("cert", "", "HTTPS certificate file")
-	keyFile := flag.String("key", "", "HTTPS private key file")
+	var addrs arrStr
+	flag.Var(&addrs, "addr", "Server listen address (e.g., https://:80)")
+	certFile := flag.String("cert", "", "TLS certificate file")
+	keyFile := flag.String("key", "", "TLS private key file")
 	flag.Parse()
 
-	chHttp := make(chan error)
-	chHttps := make(chan error)
+	if len(addrs) > 0 {
+		chErr := make(chan error)
 
-	http.HandleFunc("/", printHeaders)
+		for _, addr := range addrs {
+			serveHttp(addr, *certFile, *keyFile, chErr)
+		}
 
-	fmt.Fprintf(os.Stdout, "HTTP Server: starting\n")
-	launchHttp(*addrHttp, chHttp)
-
-	fmt.Fprintf(os.Stdout, "HTTPS Server: starting\n")
-	launchHttps(*addrHttps, chHttps, *certFile, *keyFile)
-
-	select {
-	case err := <-chHttp:
-		fmt.Fprintf(os.Stderr, "HTTP Server: %v\n", err)
-	case err := <-chHttps:
-		fmt.Fprintf(os.Stderr, "HTTPS Server: %v\n", err)
+		// Exit on first error
+		select {
+		case <-chErr:
+		}
+	} else {
+		fmt.Fprintf(os.Stdout, "Usage of go-server:\n\n")
+		flag.PrintDefaults()
 	}
 }

@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 ExecStartPre=-/bin/mkdir -p /var/log/go-server
-ExecStart=/usr/local/bin/go-server -cert /etc/pki/nginx/server.crt -key /etc/pki/nginx/private/server.key
+ExecStart=/usr/local/bin/go-server -addr http://:80 -addr https://:443 -cert /etc/pki/nginx/server.crt -key /etc/pki/nginx/private/server.key
 LimitNOFILE=4096
 Restart=always
 RestartSec=5
