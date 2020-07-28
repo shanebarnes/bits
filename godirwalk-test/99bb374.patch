@@ -1,0 +1,37 @@
+diff --git a/readdir_unix.go b/readdir_unix.go
+index a993038..39122c6 100644
+--- a/readdir_unix.go
++++ b/readdir_unix.go
+@@ -69,6 +69,9 @@ func readDirents(osDirname string, scratchBuffer []byte) ([]*Dirent, error) {
+ 		childName := string(nameSlice)
+ 		mt, err := modeTypeFromDirent(&sde, osDirname, childName)
+ 		if err != nil {
++			//if os.IsNotExist(err) {
++			//	continue
++			//}
+ 			_ = dh.Close()
+ 			return nil, err
+ 		}
+@@ -96,7 +99,7 @@ func readDirnames(osDirname string, scratchBuffer []byte) ([]string, error) {
+ 			n, err := syscall.ReadDirent(fd, scratchBuffer)
+ 			// n, err := unix.ReadDirent(fd, scratchBuffer)
+ 			if err != nil {
+-				if err == syscall.EINTR /* || err == unix.EINTR */ {
++				if err == syscall.EINTR /* || err == unix.EINTR */ /*|| os.IsNotExist(err) || err == syscall.ENOENT*/ {
+ 					continue
+ 				}
+ 				_ = dh.Close()
+diff --git a/walk.go b/walk.go
+index b15a190..ce58237 100644
+--- a/walk.go
++++ b/walk.go
+@@ -272,6 +272,9 @@ func walk(osPathname string, dirent *Dirent, options *Options) error {
+ 		osChildname := filepath.Join(osPathname, deChild.name)
+ 		if err != nil {
+ 			if action := options.ErrorCallback(osChildname, err); action == SkipNode {
++				//if os.IsNotExist(err) {
++				//	continue
++				//}
+ 				return nil
+ 			}
+ 			return err
