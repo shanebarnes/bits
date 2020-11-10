@@ -29,8 +29,8 @@ func main() {
 		panic("Report interval must be greater than zero")
 	} else if *workers < 1 {
 		panic("Threads must be greater than zero")
-	} else if *workers > runtime.NumCPU()*4 {
-		panic("Threads must be less than or equal to " + strconv.FormatInt(int64(runtime.NumCPU()*4), 10))
+	} else if *workers > 256 {
+		panic("Threads must be less than or equal to 256")
 	}
 	reportDur := time.Duration(*reportInt) * time.Second
 
