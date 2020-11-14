@@ -6,10 +6,12 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
 const (
+	pathSeparator = string(os.PathSeparator)
 	sockName = "unix.sock"
 )
 
@@ -17,7 +19,12 @@ func main() {
 	server := flag.Bool("s", false, "server mode")
 	flag.Parse()
 
-	sockAddr := os.TempDir() + sockName
+	dir := os.TempDir()
+	if !strings.HasSuffix(dir, pathSeparator) {
+		dir += pathSeparator
+	}
+	sockAddr := dir + sockName
+
 	if *server {
 		runServer(sockAddr)
 	} else {
