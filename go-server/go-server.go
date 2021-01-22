@@ -23,7 +23,10 @@ const (
 )
 
 var (
-	mutex    sync.Mutex
+	addrs    arrStr
+	backlog  int
+	mp       map[string]int
+	mu       sync.Mutex
 	reqCount int64
 	timeZero time.Time
 )
@@ -40,8 +43,8 @@ func (a *arrStr) Set(val string) error {
 }
 
 func incrementRequestCount() int64 {
-	mutex.Lock()
-	defer mutex.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	reqCount++
 	return reqCount
 }
@@ -56,6 +59,21 @@ func connStateCb(conn net.Conn, state http.ConnState) {
 		remoteAddr = conn.RemoteAddr().String()
 	}
 
+	mu.Lock()
+	switch state {
+	case http.StateNew:
+		if len(mp) > backlog {
+			conn.Close()
+		} else if _, ok := mp[remoteAddr]; !ok {
+			mp[remoteAddr] = 1
+		} else {
+			conn.Close()
+		}
+	case http.StateHijacked, http.StateClosed:
+		delete(mp, remoteAddr)
+	}
+	mu.Unlock()
+
 	fmt.Fprintf(os.Stdout,
 		"server %v: remote address=%v, http state=%v\n",
 		localAddr,
@@ -66,7 +84,9 @@ func connStateCb(conn net.Conn, state http.ConnState) {
 func newHttpServer() *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", printRequestTrace)
-	return &http.Server{ConnState: connStateCb, Handler: mux}
+	server := http.Server{ConnState: connStateCb, Handler: mux}
+	server.SetKeepAlivesEnabled(false)
+	return &server
 }
 
 func serveHttp(addr, tlsCert, tlsKey string, ch chan error) {
@@ -130,11 +150,15 @@ func printRequestTrace(rw http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func init() {
+	mp = make(map[string]int)
+}
+
 func main() {
 	timeZero = time.Now()
 
-	var addrs arrStr
 	flag.Var(&addrs, "addr", "Server listen address (e.g., https://:80)")
+	flag.IntVar(&backlog, "backlog", 10, "Maximum number of connection requests queued")
 	certFile := flag.String("cert", "", "TLS certificate file")
 	keyFile := flag.String("key", "", "TLS private key file")
 	flag.Parse()
