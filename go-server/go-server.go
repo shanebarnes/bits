@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,10 +16,14 @@ import (
 	"syscall"
 	"time"
 
+	quic "github.com/lucas-clemente/quic-go"
+	"github.com/lucas-clemente/quic-go/http3"
 	"golang.org/x/net/netutil"
 )
 
 const (
+	networkTcp = "tcp"
+	networkUdp = "udp"
 	schemeHttp  = "http"
 	schemeHttps = "https"
 )
@@ -81,6 +87,14 @@ func connStateCb(conn net.Conn, state http.ConnState) {
 		state.String())
 }
 
+func listenConfig() *net.ListenConfig {
+	return &net.ListenConfig {
+		Control: func(network, address string, c syscall.RawConn) error {
+			return nil
+		},
+	}
+}
+
 func newHttpServer() *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", printRequestTrace)
@@ -89,29 +103,66 @@ func newHttpServer() *http.Server {
 	return &server
 }
 
-func serveHttp(addr, tlsCert, tlsKey string, ch chan error) {
+func serveHttp(network, addr, tlsCert, tlsKey string, ch chan error) {
 	go func() {
-		fmt.Fprintf(os.Stdout, "server %v: starting\n", addr)
+		fmt.Fprintf(os.Stdout, "server %v: starting on %v\n", addr, network)
 		url, err := url.Parse(addr)
 		if err == nil {
-			var listener net.Listener
-			listener, err = net.Listen("tcp", url.Host)
-			if err == nil {
-				listener = netutil.LimitListener(listener, syscall.SOMAXCONN)
-				defer listener.Close()
-				switch url.Scheme {
-				case schemeHttp:
-					err = newHttpServer().Serve(listener)
-				case schemeHttps:
-					err = newHttpServer().ServeTLS(listener, tlsCert, tlsKey)
-				default:
-					err = syscall.EINVAL
-				}
+			switch network {
+			case networkUdp:
+				err = serveHttpUdp(url, tlsCert, tlsKey)
+			default:
+				err = serveHttpTcp(url, tlsCert, tlsKey)
 			}
 		}
-		fmt.Fprintf(os.Stdout, "server %v: stopping, %v\n", addr, err)
+		fmt.Fprintf(os.Stdout, "server %v: stopping on %v, %v\n", addr, network, err)
 		ch <- err
 	} ()
+}
+
+func serveHttpTcp(url *url.URL, tlsCert, tlsKey string) error {
+	listener, err := listenConfig().Listen(context.Background(), networkTcp, url.Host)
+	if err == nil {
+		listener = netutil.LimitListener(listener, syscall.SOMAXCONN)
+		defer listener.Close()
+
+		switch url.Scheme {
+		case schemeHttp:
+			err = newHttpServer().Serve(listener)
+		case schemeHttps:
+			err = newHttpServer().ServeTLS(listener, tlsCert, tlsKey)
+		default:
+			err = syscall.EINVAL
+		}
+	}
+	return err
+}
+
+func serveHttpUdp(url *url.URL, tlsCert, tlsKey string) error {
+	pc, err := listenConfig().ListenPacket(context.Background(), networkUdp, url.Host)
+	if err == nil {
+		defer pc.Close()
+		server := http3.Server{
+			QuicConfig: &quic.Config{
+				HandshakeTimeout: 10 * time.Second,
+				KeepAlive: false,
+				MaxIncomingUniStreams: 0,
+				MaxIncomingStreams: 0,
+				MaxIdleTimeout: 10 * time.Second,
+				MaxReceiveConnectionFlowControlWindow: 0,
+				MaxReceiveStreamFlowControlWindow: 0,
+			},
+			Server: newHttpServer(),
+		}
+
+		cert, _ := tls.LoadX509KeyPair(tlsCert, tlsKey)
+		server.Server.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion: tls.VersionTLS12,
+		}
+		err = server.Serve(pc)
+	}
+	return err
 }
 
 type requestTrace struct {
@@ -167,7 +218,10 @@ func main() {
 		chErr := make(chan error)
 
 		for _, addr := range addrs {
-			serveHttp(addr, *certFile, *keyFile, chErr)
+			if url, err := url.Parse(addr); err == nil && url.Scheme == schemeHttps {
+				serveHttp(networkUdp, addr, *certFile, *keyFile, chErr)
+			}
+			serveHttp(networkTcp, addr, *certFile, *keyFile, chErr)
 		}
 
 		// Exit on first error
