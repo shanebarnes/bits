@@ -18,6 +18,7 @@ import (
 
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/lucas-clemente/quic-go/http3"
+	"golang.org/x/net/http2"
 	"golang.org/x/net/netutil"
 )
 
@@ -100,6 +101,7 @@ func newHttpServer() *http.Server {
 	mux.HandleFunc("/", printRequestTrace)
 	server := http.Server{ConnState: connStateCb, Handler: mux}
 	server.SetKeepAlivesEnabled(false)
+	http2.ConfigureServer(&server, &http2.Server{MaxConcurrentStreams: 100})
 	return &server
 }
 
