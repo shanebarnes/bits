@@ -1,0 +1,26 @@
+[
+    {
+        "name": "n1",
+	"capacity_bytes": 8000000000000,
+	"objects": [
+            {
+                "name": "o1",
+		"size_bytes": 6750000000000
+	    }
+	]
+    },
+    {
+        "name": "n2",
+	"capacity_bytes": 8000000000000,
+	"objects": [
+            {
+                "name": "o2",
+		"size_bytes": 500000000000
+	    },
+            {
+                "name": "o3",
+		"size_bytes": 7500000000000
+	    }
+	]
+    }
+]
