@@ -23,8 +23,8 @@ import (
 )
 
 const (
-	networkTcp = "tcp"
-	networkUdp = "udp"
+	networkTcp  = "tcp"
+	networkUdp  = "udp"
 	schemeHttp  = "http"
 	schemeHttps = "https"
 )
@@ -89,7 +89,7 @@ func connStateCb(conn net.Conn, state http.ConnState) {
 }
 
 func listenConfig() *net.ListenConfig {
-	return &net.ListenConfig {
+	return &net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			return nil
 		},
@@ -119,7 +119,7 @@ func serveHttp(network, addr, tlsCert, tlsKey string, ch chan error) {
 		}
 		fmt.Fprintf(os.Stdout, "server %v: stopping on %v, %v\n", addr, network, err)
 		ch <- err
-	} ()
+	}()
 }
 
 func serveHttpTcp(url *url.URL, tlsCert, tlsKey string) error {
@@ -146,13 +146,13 @@ func serveHttpUdp(url *url.URL, tlsCert, tlsKey string) error {
 		defer pc.Close()
 		server := http3.Server{
 			QuicConfig: &quic.Config{
-				HandshakeTimeout: 10 * time.Second,
-				KeepAlive: false,
-				MaxIncomingUniStreams: 0,
-				MaxIncomingStreams: 0,
-				MaxIdleTimeout: 10 * time.Second,
+				HandshakeTimeout:                      10 * time.Second,
+				KeepAlive:                             false,
+				MaxIncomingUniStreams:                 0,
+				MaxIncomingStreams:                    0,
+				MaxIdleTimeout:                        10 * time.Second,
 				MaxReceiveConnectionFlowControlWindow: 0,
-				MaxReceiveStreamFlowControlWindow: 0,
+				MaxReceiveStreamFlowControlWindow:     0,
 			},
 			Server: newHttpServer(),
 		}
@@ -160,7 +160,7 @@ func serveHttpUdp(url *url.URL, tlsCert, tlsKey string) error {
 		cert, _ := tls.LoadX509KeyPair(tlsCert, tlsKey)
 		server.Server.TLSConfig = &tls.Config{
 			Certificates: []tls.Certificate{cert},
-			MinVersion: tls.VersionTLS12,
+			MinVersion:   tls.VersionTLS12,
 		}
 		err = server.Serve(pc)
 	}
@@ -168,27 +168,29 @@ func serveHttpUdp(url *url.URL, tlsCert, tlsKey string) error {
 }
 
 type requestTrace struct {
-	Id            int64       `json:"traceId"`
-	Time          string      `json:"time"`
-	Uptime        string      `json:"uptime"`
-	Method        string      `json:"method"`
-	Url           string      `json:"url"`
-	Protocol      string      `json:"protocol"`
-	ContentLength int64       `json:"contentLength"`
-	Host          string      `json:"host"`
-	RemoteAddress string      `json:"remoteAddress"`
-	Headers       http.Header `json:"headers"`
+	Id            int64               `json:"traceId"`
+	Time          string              `json:"time"`
+	Uptime        string              `json:"uptime"`
+	Tls           tls.ConnectionState `json:"tlsConnectionState"`
+	Method        string              `json:"method"`
+	Url           string              `json:"url"`
+	Protocol      string              `json:"protocol"`
+	ContentLength int64               `json:"contentLength"`
+	Host          string              `json:"host"`
+	RemoteAddress string              `json:"remoteAddress"`
+	Headers       http.Header         `json:"headers"`
 }
 
 func printRequestTrace(rw http.ResponseWriter, req *http.Request) {
 	now := time.Now()
 	traceId := incrementRequestCount()
 	writers := []io.Writer{os.Stdout, rw}
-	for _, writer := range writers{
+	for _, writer := range writers {
 		data := requestTrace{
 			Id:            traceId,
 			Time:          now.Format(time.RFC3339Nano),
 			Uptime:        now.Sub(timeZero).String(),
+			Tls:           getTlsConnState(req),
 			Method:        req.Method,
 			Url:           req.RequestURI,
 			Protocol:      req.Proto,
@@ -201,6 +203,13 @@ func printRequestTrace(rw http.ResponseWriter, req *http.Request) {
 		encoder.SetIndent("", "   ") // Make it pretty
 		encoder.Encode(data)
 	}
+}
+
+func getTlsConnState(req *http.Request) tls.ConnectionState {
+	if req.TLS == nil {
+		return tls.ConnectionState{}
+	}
+	return *req.TLS
 }
 
 func init() {
