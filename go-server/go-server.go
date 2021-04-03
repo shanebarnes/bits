@@ -167,18 +167,28 @@ func serveHttpUdp(url *url.URL, tlsCert, tlsKey string) error {
 	return err
 }
 
+type tlsTrace struct {
+	Version                    string `json:"version"`
+	HandshakeComplete          bool   `json:"handshakeComplete"`
+	DidResume                  bool   `json:"didResume"`
+	CipherSuite                string `json:"cipherSuite"`
+	NegotiatedProtocol         string `json:"negotiatedProtocol"`
+	NegotiatedProtocolIsMutual bool   `json:"negotiatedProtocolIsMutual"`
+	ServerName                 string `json:"serverName"`
+}
+
 type requestTrace struct {
-	Id            int64               `json:"traceId"`
-	Time          string              `json:"time"`
-	Uptime        string              `json:"uptime"`
-	Tls           tls.ConnectionState `json:"tlsConnectionState"`
-	Method        string              `json:"method"`
-	Url           string              `json:"url"`
-	Protocol      string              `json:"protocol"`
-	ContentLength int64               `json:"contentLength"`
-	Host          string              `json:"host"`
-	RemoteAddress string              `json:"remoteAddress"`
-	Headers       http.Header         `json:"headers"`
+	Id            int64       `json:"traceId"`
+	Time          string      `json:"time"`
+	Uptime        string      `json:"uptime"`
+	Tls           tlsTrace    `json:"tlsConnectionState"`
+	Method        string      `json:"method"`
+	Url           string      `json:"url"`
+	Protocol      string      `json:"protocol"`
+	ContentLength int64       `json:"contentLength"`
+	Host          string      `json:"host"`
+	RemoteAddress string      `json:"remoteAddress"`
+	Headers       http.Header `json:"headers"`
 }
 
 func printRequestTrace(rw http.ResponseWriter, req *http.Request) {
@@ -190,7 +200,7 @@ func printRequestTrace(rw http.ResponseWriter, req *http.Request) {
 			Id:            traceId,
 			Time:          now.Format(time.RFC3339Nano),
 			Uptime:        now.Sub(timeZero).String(),
-			Tls:           getTlsConnState(req),
+			Tls:           getTlsTrace(req),
 			Method:        req.Method,
 			Url:           req.RequestURI,
 			Protocol:      req.Proto,
@@ -205,11 +215,38 @@ func printRequestTrace(rw http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func getTlsConnState(req *http.Request) tls.ConnectionState {
-	if req.TLS == nil {
-		return tls.ConnectionState{}
+func getTlsVersion(version uint16) string {
+	str := ""
+	switch version {
+	case tls.VersionSSL30:
+		str = "SSL 3.0"
+	case tls.VersionTLS10:
+		str = "TLS 1.0"
+	case tls.VersionTLS11:
+		str = "TLS 1.1"
+	case tls.VersionTLS12:
+		str = "TLS 1.2"
+	case tls.VersionTLS13:
+		str = "TLS 1.3"
+	default:
+		str = fmt.Sprintf("0x%04X", version)
 	}
-	return *req.TLS
+	return str
+}
+
+func getTlsTrace(req *http.Request) tlsTrace {
+	if req.TLS != nil {
+		return tlsTrace{
+			Version:                    getTlsVersion(req.TLS.Version),
+			HandshakeComplete:          req.TLS.HandshakeComplete,
+			DidResume:                  req.TLS.DidResume,
+			CipherSuite:                tls.CipherSuiteName(req.TLS.CipherSuite),
+			NegotiatedProtocol:         req.TLS.NegotiatedProtocol,
+			NegotiatedProtocolIsMutual: req.TLS.NegotiatedProtocolIsMutual,
+			ServerName:                 req.TLS.ServerName,
+		}
+	}
+	return tlsTrace{}
 }
 
 func init() {
