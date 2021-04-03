@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	networkTcp  = "tcp"
-	networkUdp  = "udp"
-	schemeHttp  = "http"
-	schemeHttps = "https"
+	networkTcp    = "tcp"
+	networkUdp    = "udp"
+	schemeHttp    = "http"
+	schemeHttps   = "https"
+	tlsMinVersion = tls.VersionTLS12
 )
 
 var (
@@ -99,7 +100,7 @@ func listenConfig() *net.ListenConfig {
 func newHttpServer() *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", printRequestTrace)
-	server := http.Server{ConnState: connStateCb, Handler: mux}
+	server := http.Server{ConnState: connStateCb, Handler: mux, TLSConfig: &tls.Config{MinVersion: tlsMinVersion}}
 	server.SetKeepAlivesEnabled(false)
 	http2.ConfigureServer(&server, &http2.Server{MaxConcurrentStreams: 100})
 	return &server
@@ -160,7 +161,6 @@ func serveHttpUdp(url *url.URL, tlsCert, tlsKey string) error {
 		cert, _ := tls.LoadX509KeyPair(tlsCert, tlsKey)
 		server.Server.TLSConfig = &tls.Config{
 			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
 		}
 		err = server.Serve(pc)
 	}
