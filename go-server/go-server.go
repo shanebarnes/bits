@@ -111,6 +111,7 @@ func newTlsConfig(reloader *gttls.Reloader) *tls.Config {
 	return &tls.Config{
 		GetCertificate: reloader.GetCertificateFunc(),
 		MinVersion:     tlsMinVersion,
+		NextProtos:     []string{"h2", "http/1.1"},
 	}
 }
 
