@@ -18,6 +18,7 @@ import (
 
 	quic "github.com/lucas-clemente/quic-go"
 	"github.com/lucas-clemente/quic-go/http3"
+	gttls "github.com/shanebarnes/goto/crypto/tls"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/netutil"
 )
@@ -97,13 +98,20 @@ func listenConfig() *net.ListenConfig {
 	}
 }
 
-func newHttpServer() *http.Server {
+func newHttpServer(tlsConfig *tls.Config) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", printRequestTrace)
-	server := http.Server{ConnState: connStateCb, Handler: mux, TLSConfig: &tls.Config{MinVersion: tlsMinVersion}}
+	server := http.Server{ConnState: connStateCb, Handler: mux, TLSConfig: tlsConfig}
 	server.SetKeepAlivesEnabled(false)
 	http2.ConfigureServer(&server, &http2.Server{MaxConcurrentStreams: 100})
 	return &server
+}
+
+func newTlsConfig(reloader *gttls.Reloader) *tls.Config {
+	return &tls.Config{
+		GetCertificate: reloader.GetCertificateFunc(),
+		MinVersion:     tlsMinVersion,
+	}
 }
 
 func serveHttp(network, addr, tlsCert, tlsKey string, ch chan error) {
@@ -124,47 +132,51 @@ func serveHttp(network, addr, tlsCert, tlsKey string, ch chan error) {
 }
 
 func serveHttpTcp(url *url.URL, tlsCert, tlsKey string) error {
-	listener, err := listenConfig().Listen(context.Background(), networkTcp, url.Host)
-	if err == nil {
+	if reloader, err := gttls.NewCertificateReloader(tlsCert, tlsKey); err != nil {
+		return err
+	} else if listener, err := listenConfig().Listen(context.Background(), networkTcp, url.Host); err != nil {
+		reloader.Close()
+		return err
+	} else {
 		listener = netutil.LimitListener(listener, syscall.SOMAXCONN)
+		if url.Scheme == schemeHttps {
+			listener = tls.NewListener(listener, newTlsConfig(reloader))
+		}
+
 		defer listener.Close()
+		defer reloader.Close()
 
 		switch url.Scheme {
-		case schemeHttp:
-			err = newHttpServer().Serve(listener)
-		case schemeHttps:
-			err = newHttpServer().ServeTLS(listener, tlsCert, tlsKey)
+		case schemeHttp, schemeHttps:
+			return newHttpServer(newTlsConfig(reloader)).Serve(listener)
 		default:
-			err = syscall.EINVAL
+			return syscall.EINVAL
 		}
 	}
-	return err
 }
 
 func serveHttpUdp(url *url.URL, tlsCert, tlsKey string) error {
-	pc, err := listenConfig().ListenPacket(context.Background(), networkUdp, url.Host)
-	if err == nil {
+	if reloader, err := gttls.NewCertificateReloader(tlsCert, tlsKey); err != nil {
+		return err
+	} else if pc, err := listenConfig().ListenPacket(context.Background(), networkUdp, url.Host); err != nil {
+		reloader.Close()
+		return err
+	} else {
 		defer pc.Close()
+		defer reloader.Close()
+
 		server := http3.Server{
 			QuicConfig: &quic.Config{
-				HandshakeTimeout:                      10 * time.Second,
-				KeepAlive:                             false,
-				MaxIncomingUniStreams:                 0,
-				MaxIncomingStreams:                    0,
-				MaxIdleTimeout:                        10 * time.Second,
-				MaxReceiveConnectionFlowControlWindow: 0,
-				MaxReceiveStreamFlowControlWindow:     0,
+				KeepAlive:             false,
+				MaxIncomingUniStreams: 0,
+				MaxIncomingStreams:    0,
+				MaxIdleTimeout:        10 * time.Second,
 			},
-			Server: newHttpServer(),
+			Server: newHttpServer(newTlsConfig(reloader)),
 		}
 
-		cert, _ := tls.LoadX509KeyPair(tlsCert, tlsKey)
-		server.Server.TLSConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-		}
-		err = server.Serve(pc)
+		return server.Serve(pc)
 	}
-	return err
 }
 
 type tlsTrace struct {
